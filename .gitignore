@@ -1,0 +1,30 @@
+# Ignore Arduino build files
+*.ino.cpp
+*.elf
+*.hex
+*.bin
+*.eep
+*.map
+*.d
+*.o
+*.a
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+
+# VS Code settings
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Arduino libraries (optional, si locales)
+libraries/
+
+# Build output
+build/
