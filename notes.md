@@ -1,5 +1,35 @@
 # Journal de développement – Contrôle Pompe Chalet
 
+## 2026-02-04-2 : Test LCD 16x2 et Blink sur Arduino UNO R4 Minima
+
+- Téléversement du code de test (affichage LCD + clignotement LED intégrée)
+- Résultat : affichage OK après ajustement du potentiomètre de contraste
+- Code archivé dans `ctl_pompe_v1/ctl_pompe_v1.ino`
+
+**Brochage LCD 16x2 (mode 4 bits)**
+- VSS → GND Arduino
+- VDD → +5V Arduino
+- V0 → curseur potentiomètre (milieu)
+- RS → pin 12 Arduino
+- RW → GND Arduino
+- E  → pin 11 Arduino
+- D4 → pin 5 Arduino
+- D5 → pin 4 Arduino
+- D6 → pin 3 Arduino
+- D7 → pin 2 Arduino
+- A  → +5V Arduino (via résistance 100–220Ω)
+- K  → GND Arduino
+
+**Potentiomètre contraste**
+- 1re patte → +5V Arduino
+- 2e patte (milieu) → V0 LCD
+- 3e patte → GND Arduino
+
+**Remarques**
+- L’alimentation du LCD et du rétroéclairage se fait via le 5V Arduino.
+- Le blink de la LED intégrée permet de vérifier que le code tourne bien.
+
+
 ## Objectif du projet
 Automatiser la gestion d’une pompe à eau de chalet avec Arduino : affichage LCD, clavier, capteurs (pression, débit, courant), électrovannes, sécurité, et supervision évolutive (communication radio à terme).
 
