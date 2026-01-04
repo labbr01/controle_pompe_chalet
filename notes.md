@@ -62,4 +62,10 @@ Automatiser la gestion d’une pompe à eau de chalet avec Arduino : affichage
 
 ---
 
-*Copie/colle ce fichier dans ton nouveau projet et complète-le au fil de l’avancement !*
+## Journal des tests matériels
+
+- 2026-01-04 : Test initial Arduino UNO R4 Minima
+  - Installation des drivers et outils via l’IDE Arduino 2.3.7
+  - Téléversement du sketch Blink (blink/blink.ino)
+  - Modification des délais pour valider le contrôle de la LED intégrée
+  - Résultat : OK, carte et environnement prêts pour la suite
