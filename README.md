@@ -24,7 +24,3 @@ Automatisation de la gestion d’une pompe à eau de chalet avec Arduino R4 Mini
 
 Voir `notes.md` pour le suivi détaillé.
 
-
-git remote add origin https://github.com/labbr01/controle_pompe_chalet.git
-git branch -M main
-git push -u origin main

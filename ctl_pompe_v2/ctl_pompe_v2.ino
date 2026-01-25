@@ -1,3 +1,4 @@
+// OBSOLÈTE : Voir README_CAPTEURS.md
 // Ajout pour la détection rapide de la purge
 const int NB_PURGE_TS = 5;
 unsigned long purgeTs[NB_PURGE_TS] = {0};
@@ -52,6 +53,9 @@ bool traceInit = false;
 
 bool firstPrint = true;
 
+// Flag global pour désactiver la gestion centrale pendant la purge pulse
+volatile bool purgePulseEnCours = false;
+
 // Variable pour mémoriser la dernière pression lors d'un débit 0 ou 1000
 int lastPressionDebitZero = -1;
 
@@ -100,6 +104,8 @@ void setup() {
 
 // --- Gestion automatique de la pompe et de la purge ---
 void gestionAutomatique() {
+    // Désactive toute la gestion centrale si pulse purge en cours
+    if (purgePulseEnCours) return;
   // Mode debug : purge bloquée
   if (purgeBloquee) {
     if (digitalRead(RELAIS_PURGE) != LOW) {
@@ -377,6 +383,7 @@ void loop() {
       digitalWrite(RELAIS_PURGE, HIGH);
       pulsePurgeActive = true;
       pulsePurgeStart = now;
+      purgePulseEnCours = true;
     }
 
     // Affichage conditionnel si variation >= 10 sur au moins une valeur OU premier affichage
@@ -431,6 +438,7 @@ void loop() {
       Serial.println("[ACTION][LOOP] Fin du pulse relais purge (10s)");
       pulsePurgeActive = false;
       pulsePurgeWasActive = true;
+      purgePulseEnCours = false;
     }
   } else if (pulsePurgeWasActive && nbTrue < 5) {
     // Réarmement du pulse si la condition retombe sous 5/10
