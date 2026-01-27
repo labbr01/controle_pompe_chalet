@@ -42,8 +42,13 @@ const int RELAIS_PURGE = 8;   // D8
 
 // Variables globales pour états capteurs
 bool eauPresente = false;
-int debitEtat = 0;
 float courant = 0.0;
+
+// Buffer circulaire pour débitmètre
+const int NBUF = 10;
+int bufDebit[NBUF];
+int idxBuf = 0;
+unsigned long lastSample = 0;
 
 void setup() {
   Serial.begin(9600);
@@ -56,16 +61,23 @@ void setup() {
   pinMode(PIN_DEBIT, INPUT);
   // Les relais ne sont pas activés dans cette version
 
-  lcd.setCursor(0, 0);
-  lcd.print("CTL POMPE PUITS");
+  // Pas d'interruption débitmètre, lecture directe dans le buffer
 }
 
 void loop() {
   lireSondeIR();
-  lireDebitmetre();
   lireCourant();
+
+  // Acquisition débitmètre toutes les 100ms (10Hz)
+  unsigned long now = millis();
+  if (now - lastSample >= 100) {
+    lastSample = now;
+    bufDebit[idxBuf] = digitalRead(PIN_DEBIT);
+    idxBuf = (idxBuf + 1) % NBUF;
+  }
+
   majAffichage();
-  delay(500);
+  delay(50);
 }
 
 void lireSondeIR() {
@@ -73,8 +85,9 @@ void lireSondeIR() {
   eauPresente = (etat == HIGH); // Adapter si besoin selon le sens de la sonde
 }
 
-void lireDebitmetre() {
-  debitEtat = digitalRead(PIN_DEBIT); // 0 ou 1, à adapter si besoin
+
+void compteurDebit() {
+  // plus utilisé
 }
 
 void lireCourant() {
@@ -86,21 +99,30 @@ void lireCourant() {
 }
 
 void majAffichage() {
-  lcd.setCursor(0, 1);
-  lcd.print("Eau: ");
-  lcd.print(eauPresente ? "OUI " : "NON ");
-  lcd.print("  D: ");
-  lcd.print(debitEtat);
-  lcd.print("   ");
+  // Ligne 0 : Pompe: On/Off Air: Oui/Non (format compact)
+  char ligne0[21];
+  const char* pompeStr = "On ";
+  const char* airStr = eauPresente ? "Non" : "Oui";
+  snprintf(ligne0, 21, "Pompe:%s Air:%s", pompeStr, airStr);
+  lcd.setCursor(0, 0); lcd.print(ligne0);
 
-  lcd.setCursor(0, 2);
-  lcd.print("I: ");
-  lcd.print(courant, 2);
-  lcd.print("A       ");
+  // Ligne 1 : Pompage:Oui/Non (si au moins un 1 dans le buffer)
+  int sommeDebit = 0;
+  for (int i = 0; i < NBUF; i++) sommeDebit += bufDebit[i];
+  char ligne1[21];
+  snprintf(ligne1, 21, "Pompage:%s", (sommeDebit > 0) ? "Oui" : "Non");
+  lcd.setCursor(0, 1); lcd.print(ligne1);
 
-  lcd.setCursor(0, 3);
-  lcd.print("Relais: P ");
-  lcd.print("N/A  ");
-  lcd.print("V ");
-  lcd.print("N/A");
+  // Ligne 2 : Direction:Chalet
+  char ligne2[21];
+  snprintf(ligne2, 21, "Direction:Chalet");
+  lcd.setCursor(0, 2); lcd.print(ligne2);
+
+  // Ligne 3 : Débit: séquence binaire et total
+  char bufStr[11];
+  for (int i = 0; i < NBUF; i++) bufStr[i] = bufDebit[(idxBuf + i) % NBUF] ? '1' : '0';
+  bufStr[NBUF] = '\0';
+  char ligne3[21];
+  snprintf(ligne3, 21, "Debit:%s %2d/10", bufStr, sommeDebit);
+  lcd.setCursor(0, 3); lcd.print(ligne3);
 }
