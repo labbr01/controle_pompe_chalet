@@ -33,15 +33,19 @@ void setup() {
   Serial.begin(9600);
   lcd.init();
   lcd.backlight();
-  lcdLog("CLIENT NRF24L01");
-  lcdLog("LCD OK!");
+  lcd.clear();
+  lcd.setCursor(0,0);
+  lcd.print("En attente comm...");
+  pinMode(6, INPUT_PULLUP); // CMD1
+  pinMode(7, INPUT_PULLUP); // CMD2
+  pinMode(8, INPUT_PULLUP); // CMD3
   radio.begin();
   if (!radio.begin()) {
     lcd.clear();
     lcd.setCursor(0,0);
     lcd.print("NRF24L01 FAIL");
     while (1); // Stop tout
-}
+  }
   radio.openReadingPipe(0, adresse);
   radio.openWritingPipe(adresse_reponse); // pour répondre au maître
   radio.setPALevel(RF24_PA_LOW);
@@ -56,59 +60,83 @@ void loop() {
   // Compteur de secondes modulo 10
   int sec = (millis() / 1000) % 10;
 
-  // Valeurs à afficher
-  char statut[8] = "---";
-  static unsigned long lastMsgTime = 0;
-  static char lastTexte[15] = "---";
+  static int lastSeq = -2;
+  static int repeatCount = 0;
+  static char lastCmd[8] = "";
+  static char lignes[4][21] = {"", "", "", ""};
+  char buf[21];
 
-  // Lecture des données
+  static bool firstReception = false;
   if (radio.available()) {
-    char texte[32] = {0};
-    radio.read(&texte, sizeof(texte));
-    strncpy(lastTexte, texte, 14);
-    lastTexte[14] = '\0';
-    strcpy(statut, "RECU");
-    lastMsgTime = millis();
-
-    // Inverser le message reçu
-    int len = strlen(lastTexte);
-    char reponse[16] = "";
-    for (int i = 0; i < len; i++) {
-      reponse[i] = lastTexte[len - 1 - i];
+    if (!firstReception) {
+      lcd.clear();
+      firstReception = true;
     }
-    reponse[len] = '\0';
+    char msg[64] = "";
+    radio.read(&msg, sizeof(msg));
+    // Parse le message : SEQ|L1|L2|L3|L4
+    int seq = 0;
+    char l1[21] = "", l2[21] = "", l3[21] = "", l4[21] = "";
+    char *token = strtok(msg, "|");
+    if (token) seq = atoi(token);
+    token = strtok(NULL, "|"); if (token) strncpy(l1, token, 20);
+    token = strtok(NULL, "|"); if (token) strncpy(l2, token, 20);
+    token = strtok(NULL, "|"); if (token) strncpy(l3, token, 20);
+    token = strtok(NULL, "|"); if (token) strncpy(l4, token, 20);
+    l1[20] = l2[20] = l3[20] = l4[20] = '\0';
 
-    // Passer en mode émission pour répondre
+    // Affiche les 4 lignes reçues
+    strncpy(lignes[0], l1, 20); lignes[0][20] = '\0';
+    strncpy(lignes[1], l2, 20); lignes[1][20] = '\0';
+    strncpy(lignes[2], l3, 20); lignes[2][20] = '\0';
+    strncpy(lignes[3], l4, 20); lignes[3][20] = '\0';
+
+    // Détecte les signaux sur D6, D7, D8
+    char cmd[8] = "";
+    if (digitalRead(6) == LOW) strcat(cmd, "CMD1");
+    if (digitalRead(7) == LOW) strcat(cmd, "CMD2");
+    if (digitalRead(8) == LOW) strcat(cmd, "CMD3");
+    if (cmd[0] == '\0') strncpy(cmd, "NONE", 7);
+
+    // Si même séquence, incrémente le compteur de répétition
+    if (seq == lastSeq) {
+      repeatCount++;
+    } else {
+      repeatCount = 0;
+      lastSeq = seq;
+      strncpy(lastCmd, cmd, 7); lastCmd[7] = '\0';
+    }
+
+    // Si 10 répétitions, demande SYNC
+    char reponse[32] = "";
+    if (repeatCount >= 10) {
+      snprintf(reponse, sizeof(reponse), "-1|SYNC");
+    } else {
+      snprintf(reponse, sizeof(reponse), "%d|%s", seq, lastCmd);
+    }
+
+    // Répond au maître
     radio.stopListening();
-    delay(5); // court délai pour stabilité
+    delay(5);
     radio.write(&reponse, sizeof(reponse));
     radio.startListening();
-  } else {
-    // Si pas de message depuis 5s, statut = "---"
-    if (millis() - lastMsgTime > 5000) {
-      strcpy(statut, "---");
-      strcpy(lastTexte, "---");
-    } else {
-      strcpy(statut, "RECU");
+
+    // Affichage LCD unique ici :
+    for (int i = 0; i < 4; i++) {
+      lcd.setCursor(0, i); lcd.print(lignes[i]);
     }
+    // Ligne 0 : Statut
+    snprintf(buf, 21, "%2d RX:%4d CMD:%-7s", sec, seq, lastCmd);
+    lcd.setCursor(0,0); lcd.print(buf); lcd.print("   ");
+    // Ligne 1 : L1
+    snprintf(buf, 21, "%s", lignes[0]);
+    lcd.setCursor(0,1); lcd.print(buf); lcd.print("   ");
+    // Ligne 2 : L2
+    snprintf(buf, 21, "%s", lignes[1]);
+    lcd.setCursor(0,2); lcd.print(buf); lcd.print("   ");
+    // Ligne 3 : L3
+    snprintf(buf, 21, "%s", lignes[2]);
+    lcd.setCursor(0,3); lcd.print(buf); lcd.print("   ");
   }
-
-  // Affichage LCD fixe avec compteur de secondes
-  char buf[21];
-  // Ligne 0 : Statut réception
-  snprintf(buf, 21, "%d Reception: %-7s", sec, statut);
-  lcd.setCursor(0,0); lcd.print(buf); lcd.print("         ");
-  // Ligne 1 : Message reçu
-  snprintf(buf, 21, "%d Msg: %-12s", sec, lastTexte);
-  lcd.setCursor(0,1); lcd.print(buf); lcd.print("   ");
-  // Ligne 2 : Uptime
-  snprintf(buf, 21, "%d Uptime: %5lus", sec, millis()/1000);
-  lcd.setCursor(0,2); lcd.print(buf); lcd.print("   ");
-  // Ligne 3 : Attente RF (compteur)
-  static unsigned long attenteRF = 0;
-  snprintf(buf, 21, "%d Attente: %5lu", sec, attenteRF);
-  lcd.setCursor(0,3); lcd.print(buf); lcd.print("   ");
-  attenteRF = (attenteRF + 1) % 10000;
-
-  delay(2000);
+  delay(200);
 }

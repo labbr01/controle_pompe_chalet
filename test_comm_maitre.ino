@@ -66,65 +66,80 @@ void setup() {
 
 unsigned long attenteRF = 0;
 
-// Ajout pour incrémenter le message et recevoir la réponse
+// Protocole handshake V1 : SEQ|L1|L2|L3|L4, réponse SEQ|CMDx, synchro -1|SYNC
 void loop() {
-  static int compteur = 0;
-  static char reponse[16] = "";
+  static int seq = 0;
+  static int retry = 0;
+  static char lastCmd[16] = "";
+  static char lignes[4][21] = {"LIGNE 1", "LIGNE 2", "LIGNE 3", "LIGNE 4"};
   int sec = (millis() / 1000) % 10;
 
-  // Préparer message helloN
-  char texte[16];
-  snprintf(texte, sizeof(texte), "hello%d", compteur);
+  // Préparer le message à envoyer
+  char msg[64];
+  snprintf(msg, sizeof(msg), "%d|%s|%s|%s|%s", seq, lignes[0], lignes[1], lignes[2], lignes[3]);
 
-  // Passer en mode réception AVANT d'envoyer
-  radio.stopListening();
-  delay(2); // court délai pour stabilité
-
-  // Envoyer le message
-  bool ok = false;
-  ok = radio.write(&texte, sizeof(texte));
-  Serial.print("Envoi: ");
-  Serial.print(texte);
-  Serial.print(" | Statut: ");
-  Serial.println(ok ? "OK" : "ECHEC");
-
-  // Passer en mode réception pour attendre une réponse
-  radio.startListening();
-  unsigned long startWait = millis();
-  bool recu = false;
+  // Handshake : tant que la réponse n'est pas correcte, on réémet
+  bool handshake_ok = false;
+  bool last_write_ok = false;
   char bufRecu[32] = "";
-  while (millis() - startWait < 500 && !recu) {
-    if (radio.available()) {
-      radio.read(&bufRecu, sizeof(bufRecu));
-      recu = true;
+  int tentatives = 0;
+  while (tentatives < 10) {
+    radio.stopListening();
+    delay(2);
+    last_write_ok = radio.write(&msg, sizeof(msg));
+    Serial.print("Envoi: "); Serial.print(msg); Serial.print(" | Statut: "); Serial.println(last_write_ok ? "OK" : "ECHEC");
+    radio.startListening();
+    unsigned long startWait = millis();
+    bool recu = false;
+    while (millis() - startWait < 500 && !recu) {
+      if (radio.available()) {
+        radio.read(&bufRecu, sizeof(bufRecu));
+        recu = true;
+      }
     }
+    radio.stopListening();
+    if (recu) {
+      // Parse la réponse : SEQ|CMDx ou -1|SYNC
+      int rseq = 0;
+      char rcmd[16] = "";
+      char *token = strtok(bufRecu, "|");
+      if (token) rseq = atoi(token);
+      token = strtok(NULL, "|");
+      if (token) strncpy(rcmd, token, 15);
+      rcmd[15] = '\0';
+      if (rseq == seq) {
+        strncpy(lastCmd, rcmd, 15); lastCmd[15] = '\0';
+        handshake_ok = true;
+        break; // bonne réponse, on sort
+      } else if (rseq == -1) {
+        // SYNC demandé
+        snprintf(bufRecu, sizeof(bufRecu), "-1|SYNC");
+        radio.stopListening(); delay(2); radio.write(&bufRecu, sizeof(bufRecu));
+        seq = 0; retry = 0; // repart à zéro
+        return;
+      }
+    }
+    tentatives++;
+    delay(100);
   }
-  radio.stopListening();
-
+  // Affichage LCD : statut + commande reçue
   char buf[21];
-  // Affichage toujours identique : ENV:OK REC:xxxxxxx
   char env[8], rec[11];
-  snprintf(env, 8, "ENV:%s", ok ? "OK " : "ECHEC");
+  snprintf(env, 8, "ENV:%s", handshake_ok ? "OK " : "ECHEC");
   env[7] = '\0';
-  if (recu && strlen(bufRecu) > 0) {
-    snprintf(rec, 11, "REC:%-7s", bufRecu);
+  if (strlen(lastCmd) > 0) {
+    snprintf(rec, 11, "CMD:%-7s", lastCmd);
   } else {
-    snprintf(rec, 11, "REC:       ");
+    snprintf(rec, 11, "CMD:       ");
   }
   rec[10] = '\0';
   snprintf(buf, 21, "%2d %s%s", sec, env, rec);
   lcd.setCursor(0,0); lcd.print(buf);
-  // Ligne 1 : Message envoyé
-  snprintf(buf, 21, "%d Msg: %-12s", sec, texte);
-  lcd.setCursor(0,1); lcd.print(buf); lcd.print("   ");
-  // Ligne 2 : Uptime
-  snprintf(buf, 21, "%d Uptime: %5lus", sec, millis()/1000);
-  lcd.setCursor(0,2); lcd.print(buf); lcd.print("   ");
-  // Ligne 3 : Attente RF (compteur)
-  snprintf(buf, 21, "%d Attente: %5lu", sec, attenteRF);
-  lcd.setCursor(0,3); lcd.print(buf); lcd.print("   ");
-
+  // Affiche les 4 lignes
+  for (int i = 0; i < 4; i++) {
+    lcd.setCursor(0, i+1); lcd.print(lignes[i]);
+  }
   attenteRF = (attenteRF + 1) % 10000;
-  compteur = (compteur + 1) % 10000;
+  seq = (seq + 1) % 10000;
   delay(2000);
 }
