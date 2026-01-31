@@ -1,3 +1,12 @@
+// ====================
+// PARAMÈTRES DE TEST (protection thermique accélérée)
+// Pour test rapide : 6 min ON max consécutives, 9 min ON max sur 18 min glissantes, pause forcée 3 min
+// Remettre les valeurs originales (20/60 min) pour l'archivage !
+const int POMPE_MAX_CONSEC_MIN = 6;      // 6 min ON consécutives max (test)
+const int POMPE_MAX_HR_MIN = 9;          // 9 min ON max sur 18 min glissantes (test)
+const int POMPE_HR_WINDOW_MIN = 18;      // Fenêtre glissante de 18 min (test)
+const int POMPE_PAUSE_MIN = 3;           // Pause forcée 3 min (test)
+// ====================
 // --- Délais (en ms) pour la gestion d'anomalie d'air ---
 const unsigned long DELAI_AIR_OUI = 15000;      // 15s (au lieu de 30s)
 const unsigned long DELAI_AIR_OUIE = 45000;     // 45s (au lieu de 90s)
@@ -118,6 +127,14 @@ void setup() {
   lcd.print("CTL CHALET (RF)");
 }
 
+// --- Variables pour la protection thermique ---
+unsigned int minutesPompageConsecutives = 0;
+unsigned long lastPompageStateChange = 0;
+bool etatPompagePrecedent = false;
+bool pauseThermiqueActive = false;
+unsigned long debutPauseThermique = 0;
+unsigned int minutesPauseRestantes = 0;
+
 void loop() {
   unsigned long now = millis();
 
@@ -160,6 +177,82 @@ void loop() {
     // Gestion de l'anomalie d'air (statut filtré sur 10s)
     const char* airStr = evaluerStatutAir(true); // PompeEnMarche = true (à adapter)
     gestionAnomalieAir(airStr);
+
+    // --- Mise à jour du compteur de minutes consécutives de pompage ---
+    int hasZero = 0, hasOne = 0;
+    for (int i = 0; i < NBUF; i++) {
+      if (bufDebit[i] == 0) hasZero = 1;
+      if (bufDebit[i] == 1) hasOne = 1;
+    }
+    bool etatPompage = (hasZero && hasOne);
+    static unsigned long debutPompage = 0;
+    static unsigned long lastMinuteTick = 0;
+    static bool sortieDePause = false;
+    if (pauseThermiqueActive) {
+      // Gestion de la pause thermique
+      unsigned long tempsEcoule = (now - debutPauseThermique) / 1000UL;
+      unsigned int minutesEcoulees = tempsEcoule / 60;
+      minutesPauseRestantes = (POMPE_PAUSE_MIN > minutesEcoulees) ? (POMPE_PAUSE_MIN - minutesEcoulees) : 0;
+      if (tempsEcoule >= (unsigned long)POMPE_PAUSE_MIN * 60UL) {
+        // Fin de pause, on réactive la pompe
+        pauseThermiqueActive = false;
+        minutesPompageConsecutives = 0;
+        minutesPauseRestantes = 0;
+        debutPompage = 0;
+        lastMinuteTick = 0;
+        sortieDePause = true; // Indique qu'on sort de pause
+        // Pompe ON (relais)
+        digitalWrite(PIN_RELAIS_POMPE, LOW);
+      } else {
+        // Pompe OFF (relais)
+        digitalWrite(PIN_RELAIS_POMPE, HIGH);
+      }
+    } else {
+      // Gestion du compteur de minutes consécutives
+      if (sortieDePause) {
+        // On vient de sortir de pause, on attend que la pompe tourne vraiment avant de compter
+        if (etatPompage) {
+          debutPompage = now;
+          minutesPompageConsecutives = 0;
+          lastMinuteTick = 0;
+          sortieDePause = false;
+        }
+      } else {
+        if (etatPompage != etatPompagePrecedent) {
+          lastPompageStateChange = now;
+          if (!etatPompage) {
+            minutesPompageConsecutives = 0;
+            debutPompage = 0;
+            lastMinuteTick = 0;
+          }
+        }
+        if (etatPompage) {
+          if (debutPompage == 0) {
+            debutPompage = now;
+            minutesPompageConsecutives = 0;
+          }
+          unsigned long elapsed = now - debutPompage;
+          unsigned int newMinutes = elapsed / 60000UL;
+          if (newMinutes != minutesPompageConsecutives) {
+            minutesPompageConsecutives = newMinutes;
+          }
+        } else {
+          debutPompage = 0;
+          lastMinuteTick = 0;
+          minutesPompageConsecutives = 0;
+        }
+        // Déclenche la pause thermique si limite atteinte
+        if (minutesPompageConsecutives >= POMPE_MAX_CONSEC_MIN) {
+          pauseThermiqueActive = true;
+          debutPauseThermique = now;
+          minutesPauseRestantes = POMPE_PAUSE_MIN;
+          // Pompe OFF (relais)
+          digitalWrite(PIN_RELAIS_POMPE, HIGH);
+        }
+      }
+    }
+    etatPompagePrecedent = etatPompage;
+
     maj_affichage();
     ajuster_relais_pompe();
     ajuster_relais_purge();
@@ -358,35 +451,31 @@ void calculer_stats() {
   sondeIRMoy = sumIR / (float)NBUF;
 }
 
+// --- Affichage simple/détaillé du débit ---
+bool afficherDebitSimple = true; // Mettre à false pour l'ancien affichage
+
 void maj_affichage() {
-
-
-  // Pompe: On/Off (toujours On pour l’instant)
-  const char* pompeStr = "On";
-  bool pompeEnMarche = true; // À ajuster plus tard selon la logique de relais
-  // Air: statut filtré sur 10s
+  // Pompe: On/Off (en fonction de la pause thermique)
+  const char* pompeStr = (pauseThermiqueActive ? "Off" : "On");
+  bool pompeEnMarche = !pauseThermiqueActive; // Pour l'affichage Air
   const char* airStr = evaluerStatutAir(pompeEnMarche);
 
-  // Ligne 0 : Pompe:On Air:Oui/Non + airCount (optionnel, positions 18-19)
+  // Ligne 0 : Pompe:On/Off Air:Oui/Non + airCount (optionnel, positions 18-19)
   char airCountStr[3] = "  ";
   if (afficherAirCountLCD) {
     int airCount = getAirCount();
     snprintf(airCountStr, 3, "%02d", airCount > 99 ? 99 : airCount);
   }
   char ligne0[21];
-  // Compose la ligne sans le chiffre, puis ajoute le chiffre aux deux dernières positions
   snprintf(ligne0, 19, "Pompe:%s Air:%s", pompeStr, airStr); // 18 caractères max
-  // Complète avec des espaces si besoin
   int len = strlen(ligne0);
   for (int i = len; i < 18; i++) ligne0[i] = ' ';
-  // Ajoute le chiffre aux deux dernières positions
   ligne0[18] = airCountStr[0];
   ligne0[19] = airCountStr[1];
   ligne0[20] = '\0';
   lcd.setCursor(0, 0); lcd.print(ligne0);
 
-
-  // Pompage: Oui si le buffer contient au moins un 1 ET au moins un 0 (alternance)
+  // Pompage: Oui/Non + minutes consécutives OU pause thermique
   int sommeDebit = 0;
   int hasZero = 0, hasOne = 0;
   for (int i = 0; i < NBUF; i++) {
@@ -395,7 +484,25 @@ void maj_affichage() {
     sommeDebit += bufDebit[i];
   }
   char ligne1[21];
-  snprintf(ligne1, 21, "Pompage:%s%12s", (hasZero && hasOne) ? "Oui" : "Non", "");
+  // Harmonisation de l’affichage du compteur et du max
+  // 4 derniers caractères = compteur (toujours à droite)
+  // Entre le statut et le compteur, affiche (max) si pertinent
+  char compteurFinal[6] = "     ";
+  char ligneBase[16] = "";
+  if (pauseThermiqueActive) {
+    snprintf(compteurFinal, 6, "%02u/%02u", minutesPauseRestantes, POMPE_PAUSE_MIN);
+    snprintf(ligneBase, 16, "Pompage:Non*");
+    // Ajoute des espaces pour arriver à 15 caractères
+    while (strlen(ligneBase) < 15) strcat(ligneBase, " ");
+    snprintf(ligne1, 21, "%s%s", ligneBase, compteurFinal);
+  } else if (hasZero && hasOne) {
+    snprintf(compteurFinal, 6, "%02u/%02u", minutesPompageConsecutives, POMPE_MAX_CONSEC_MIN);
+    snprintf(ligneBase, 16, "Pompage:Oui");
+    while (strlen(ligneBase) < 15) strcat(ligneBase, " ");
+    snprintf(ligne1, 21, "%s%s", ligneBase, compteurFinal);
+  } else {
+    snprintf(ligne1, 21, "Pompage:Non");
+  }
   ligne1[20] = '\0';
   lcd.setCursor(0, 1); lcd.print(ligne1);
 
@@ -406,20 +513,41 @@ void maj_affichage() {
   ligne2[20] = '\0';
   lcd.setCursor(0, 2); lcd.print(ligne2);
 
-  // Débit: séquence binaire et total
-  char bufStr[11];
-  for (int i = 0; i < NBUF; i++) bufStr[i] = bufDebit[(idxBuf + i) % NBUF] ? '1' : '0';
-  bufStr[NBUF] = '\0';
-  char ligne3[21];
-  snprintf(ligne3, 21, "Debit:%s %2d/10%5s", bufStr, sommeDebit, "");
-  ligne3[20] = '\0';
-  lcd.setCursor(0, 3); lcd.print(ligne3);
-
+  // --- Affichage du débit ---
+  if (afficherDebitSimple) {
+    // Affichage simple : n/10 (n = nombre de 1 dans bufDebit)
+    int debitActif = 0;
+    for (int i = 0; i < NBUF; i++) {
+      if (bufDebit[i] == 1) debitActif++;
+    }
+    char ligne3[21];
+    snprintf(ligne3, 21, "Debit: %2d/10%13s", debitActif, "");
+    ligne3[20] = '\0';
+    lcd.setCursor(0, 3); lcd.print(ligne3);
+  } else {
+    // Ancien affichage détaillé (binaire + total)
+    char bufStr[11];
+    for (int i = 0; i < NBUF; i++) bufStr[i] = bufDebit[(idxBuf + i) % NBUF] ? '1' : '0';
+    bufStr[NBUF] = '\0';
+    char ligne3[21];
+    snprintf(ligne3, 21, "Debit:%s %2d/10%5s", bufStr, sommeDebit, "");
+    ligne3[20] = '\0';
+    lcd.setCursor(0, 3); lcd.print(ligne3);
+  }
 
   // Trace console (pour debug)
-  Serial.print("Pompe: On");
+  Serial.print("Pompe: ");
+  Serial.print(pompeStr);
   Serial.print(" | Pompage: ");
-  Serial.print((hasZero && hasOne) ? "Oui" : "Non");
+  if (pauseThermiqueActive) {
+    Serial.print("Non* (pause ");
+    Serial.print(minutesPauseRestantes);
+    Serial.print(" min)");
+  } else {
+    Serial.print((hasZero && hasOne) ? "Oui" : "Non");
+    Serial.print(" | Minutes consécutives: ");
+    Serial.print(minutesPompageConsecutives);
+  }
   Serial.print(" | Air: ");
   Serial.print((sondeIRMoy < 0.5) ? "Oui" : "Non");
   Serial.print(" | Valve: Chalet");
