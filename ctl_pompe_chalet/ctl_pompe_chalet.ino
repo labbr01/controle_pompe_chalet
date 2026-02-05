@@ -1,3 +1,26 @@
+// === Dépendances et déclaration LCD ===
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <SPI.h>
+#include <nRF24L01.h>
+#include <RF24.h>
+#include <string.h>
+
+
+LiquidCrystal_I2C lcd(0x27, 20, 4);
+
+// --- Gestion de l'astérisque de communication RF ---
+unsigned long lastAsterisk = 0;
+const unsigned long ASTERISK_DURATION = 90000UL; // 1 min 30 s
+bool showAsterisk = false;
+
+void onMessageRecu() {
+  lastAsterisk = millis();
+  showAsterisk = true;
+  lcd.setCursor(19, 3);
+  lcd.print("*");
+  Serial.println("[RF] Réception confirmée !");
+}
 // === Gabarits de lignes LCD ===
 const char* LABEL_POMPE = "Pompe:";
 const char* LABEL_AIR = "Air:";
@@ -86,16 +109,10 @@ void calculer_stats();
  */
 
 
-#include <Wire.h>
-#include <LiquidCrystal_I2C.h>
-#include <SPI.h>
-#include <nRF24L01.h>
-#include <RF24.h>
-#include <string.h>
 
-// Pour indexation future: On peut utiliser des codes numériques dans le protocole RF
 
-LiquidCrystal_I2C lcd(0x27, 20, 4);
+
+
 
 // NRF24L01
 #define CE_PIN 4
@@ -384,6 +401,12 @@ void loop() {
     lcd.setCursor(0, 1); lcd.print(ligne1);
     lcd.setCursor(0, 2); lcd.print(ligne2);
     lcd.setCursor(0, 3); lcd.print(ligne3);
+    // Affichage/effacement de l'astérisque
+    if (showAsterisk && (now - lastAsterisk > ASTERISK_DURATION)) {
+      lcd.setCursor(19, 3);
+      lcd.print(" ");
+      showAsterisk = false;
+    }
 
     // Construction du message compact à transmettre (ex: 4 chiffres pour chaque index, puis compteur)
     char msg[32];
@@ -627,6 +650,7 @@ void envoyer_affichage_client(const char* l0, const char* l1, const char* l2, co
     }
     radio.stopListening();
     if (recu) {
+      onMessageRecu(); // Affiche l'astérisque à chaque réception RF
       int rseq = 0;
       char rcmd[16] = "";
       char *token = strtok(bufRecu, "|");

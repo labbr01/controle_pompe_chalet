@@ -1,3 +1,13 @@
+#include <SPI.h>
+#include <nRF24L01.h>
+#include <RF24.h>
+// === Communication RF (structure, mais pas d'envoi RF pour l'instant) ===
+#define CE_PIN 4
+#define CSN_PIN 5
+RF24 radio(CE_PIN, CSN_PIN);
+const byte adresse[6] = "00001";
+const byte adresse_reponse[6] = "00002";
+static int seq = 1;
 
 
 #include <Wire.h>
@@ -44,6 +54,12 @@ bool pauseThermiqueActive = false;
 unsigned long debutPauseThermique = 0;
 
 void setup() {
+    // Initialisation du module radio (structure, pas d'envoi RF pour l'instant)
+    radio.begin();
+    radio.openWritingPipe(adresse);
+    radio.openReadingPipe(1, adresse_reponse);
+    radio.setPALevel(RF24_PA_LOW);
+    radio.stopListening();
   pinMode(PIN_RELAIS_POMPE, OUTPUT);
   pinMode(PIN_RELAIS_PURGE, OUTPUT);
   pinMode(PIN_BOUTON_RESET, INPUT_PULLUP);
@@ -51,6 +67,7 @@ void setup() {
   digitalWrite(PIN_RELAIS_POMPE, LOW);
   digitalWrite(PIN_RELAIS_PURGE, LOW);
   Serial.begin(9600);
+  Serial.println("Demarrage minimal OK");
   lcd.init();
   lcd.backlight();
   delay(100);
@@ -63,8 +80,76 @@ void setup() {
   lcd.print("CTL CHALET (RF)");
 }
 
+// --- Ajout logique protocole communication + astérisque LCD ---
+unsigned long lastMsgSent = 0;
+const unsigned long INTERVAL_PING = 1000; // 1s
+
+unsigned long lastAsterisk = 0;
+const unsigned long ASTERISK_DURATION = 90000UL; // 1 min 30 s
+bool showAsterisk = false;
+
+// Appeler cette fonction lors de la réception d'un message/ACK RF
+void onMessageRecu() {
+  lastAsterisk = millis();
+  showAsterisk = true;
+  lcd.setCursor(19, 3);
+  lcd.print("*");
+}
+
+// Calcule le checksum (somme ASCII modulo 256, retourne 2 caractères hex)
+String calcChecksum(const char* msg) {
+  unsigned int sum = 0;
+  for (size_t i = 0; msg[i] != '\0'; i++) sum += (unsigned char)msg[i];
+  char hex[3];
+  snprintf(hex, sizeof(hex), "%02X", sum & 0xFF);
+  return String(hex);
+}
+
 void loop() {
-  unsigned long now = millis();
+    // Construction du message compact pour le chalet
+    unsigned int debitActif = 0;
+    for (int i = 0; i < NBUF; i++) {
+      if (bufDebit[i] == 1) debitActif++;
+    }
+    bool etatPompe = (debitActif > 0 && debitActif < NBUF);
+    int debitActifMsg = (debitActif > 0) ? 1 : 0;
+    int idxPompe = pauseThermiqueActive ? 5 : (etatPompe ? 4 : 5);
+    int idxPompage = etatPompe ? 0 : 1;
+    int airCount = 0;
+    for (int i = 0; i < NBUF_AIR; i++) airCount += bufAir[i];
+    int idxAir = (airCount > 10) ? 0 : 1;
+    int idxValve = 6; // Chalet
+    static char lastMsgState[32] = "";
+    char msgState[32];
+    snprintf(msgState, sizeof(msgState), "%d|%d|%d|%d|%02d", idxPompe, idxAir, idxPompage, idxValve, debitActifMsg);
+
+    // Détection de changement d'état capteur (hors astérisque écran)
+    bool capteurChange = (strcmp(msgState, lastMsgState) != 0);
+    unsigned long now = millis();
+    bool doitEmettre = false;
+    if (capteurChange) {
+      seq++;
+      if (seq > 9999) seq = 1;
+      doitEmettre = true;
+    } else if (now - lastMsgSent >= INTERVAL_PING) {
+      doitEmettre = true; // ping périodique
+    }
+
+    if (doitEmettre) {
+      char msg[48];
+      snprintf(msg, sizeof(msg), "%04d|%s", seq, msgState);
+      String msgStr = String(msg);
+      String chk = calcChecksum(msg);
+      msgStr += "|" + chk;
+      Serial.print("[A émettre au chalet] ");
+      Serial.println(msgStr);
+      if (capteurChange) {
+        strncpy(lastMsgState, msgState, sizeof(lastMsgState));
+        lastMsgState[sizeof(lastMsgState)-1] = '\0';
+      }
+      lastMsgSent = now;
+      // L'astérisque n'est plus affichée à l'émission
+    }
   // Protection thermique : si active, on attend la fin de la pause
   if (pauseThermiqueActive) {
     unsigned long tempsPause = now - debutPauseThermique;
@@ -103,11 +188,15 @@ void loop() {
       return;
     }
   }
-  // Acquisition débit
+  // Acquisition débit et sonde IR (air)
   if (now - lastSample >= INTERVAL_SAMPLE) {
     lastSample = now;
     int val = digitalRead(PIN_DEBIT);
     bufDebit[idxBuf] = val;
+    // Lecture sonde IR et mise à jour du buffer air
+    int etatIR = digitalRead(PIN_SONDE_IR);
+    bufAir[idxBufAir] = (etatIR < 1) ? 1 : 0; // IR bas = Air
+    idxBufAir = (idxBufAir + 1) % NBUF_AIR;
     idxBuf = (idxBuf + 1) % NBUF;
   }
   if (now - lastAffichage >= INTERVAL_AFFICHAGE) {
@@ -117,9 +206,7 @@ void loop() {
     for (int i = 0; i < NBUF; i++) {
       if (bufDebit[i] == 1) debitActif++;
     }
-    // Pompage actif si débit n'est ni 0/10 ni 10/10
     bool etatPompe = (debitActif > 0 && debitActif < NBUF);
-    // Comptage des minutes consécutives de pompage
     static unsigned long lastMinuteTick = 0;
     if (etatPompe) {
       if (debutPompage == 0) debutPompage = now;
@@ -127,13 +214,10 @@ void loop() {
         minutesPompageConsecutives++;
         lastMinuteTick = now;
       }
-      // Déclenche la pause thermique si limite atteinte
       if (minutesPompageConsecutives >= MAX_MINUTES_POMPAGE) {
         pauseThermiqueActive = true;
         debutPauseThermique = now;
-        // Pompe OFF
         digitalWrite(PIN_RELAIS_POMPE, HIGH);
-        // Reset buffers débit
         for (int i = 0; i < NBUF; i++) bufDebit[i] = 0;
         idxBuf = 0;
         return;
@@ -143,15 +227,26 @@ void loop() {
       lastMinuteTick = now;
       minutesPompageConsecutives = 0;
     }
-    // Ligne 0 : Pompe:On/Off Air:Oui/Non + airCount (airCount fictif à 0)
     int airCount = 0;
+    for (int i = 0; i < NBUF_AIR; i++) airCount += bufAir[i];
     char airCountStr[3];
-    snprintf(airCountStr, sizeof(airCountStr), "%02d", airCount); // Toujours 2 chiffres
+    snprintf(airCountStr, sizeof(airCountStr), "%02d", airCount > 99 ? 99 : airCount);
+
+    // Buffers pour éviter les rafraîchissements inutiles
+    static char prevLigne0[21] = "";
+    static char prevLigne1[21] = "";
+    static char prevLigne2[21] = "";
+    static char prevLigne3[21] = "";
+
     char ligne0[21];
     snprintf(ligne0, sizeof(ligne0), "%s%s %s%s %2s", LABEL_POMPE, statusText[4], LABEL_AIR, statusText[1], airCountStr);
-    ligne0[20] = '\0'; // Sécurité
-    lcd.setCursor(0, 0); lcd.print(ligne0);
-    // Ligne 1 : Pompage:Oui 00/02 ou Non
+    ligne0[20] = '\0';
+    if (strcmp(ligne0, prevLigne0) != 0) {
+      lcd.setCursor(0, 0); lcd.print(ligne0);
+      strncpy(prevLigne0, ligne0, sizeof(prevLigne0));
+      prevLigne0[sizeof(prevLigne0)-1] = '\0';
+    }
+
     char ligne1[21];
     char compteur[7];
     if (etatPompe) {
@@ -168,15 +263,34 @@ void loop() {
       snprintf(ligne1, sizeof(ligne1), "%s%s%*s%s", LABEL_POMPAGE, statusText[1], spaces, "", compteur);
     }
     ligne1[20] = '\0';
-    lcd.setCursor(0, 1); lcd.print(ligne1);
-    // Ligne 2 : Valve:Chalet
+    if (strcmp(ligne1, prevLigne1) != 0) {
+      lcd.setCursor(0, 1); lcd.print(ligne1);
+      strncpy(prevLigne1, ligne1, sizeof(prevLigne1));
+      prevLigne1[sizeof(prevLigne1)-1] = '\0';
+    }
+
     char ligne2[21];
     snprintf(ligne2, 21, "%s%s", LABEL_VALVE, statusText[6]);
-    lcd.setCursor(0, 2); lcd.print(ligne2);
-    // Ligne 3 : Débit: x/10
+    if (strcmp(ligne2, prevLigne2) != 0) {
+      lcd.setCursor(0, 2); lcd.print(ligne2);
+      strncpy(prevLigne2, ligne2, sizeof(prevLigne2));
+      prevLigne2[sizeof(prevLigne2)-1] = '\0';
+    }
+
     char ligne3[21];
     snprintf(ligne3, 21, "%s %2d/%d%10s", LABEL_DEBIT, debitActif, NBUF, "");
     ligne3[20] = '\0';
-    lcd.setCursor(0, 3); lcd.print(ligne3);
+    if (strcmp(ligne3, prevLigne3) != 0) {
+      lcd.setCursor(0, 3); lcd.print(ligne3);
+      strncpy(prevLigne3, ligne3, sizeof(prevLigne3));
+      prevLigne3[sizeof(prevLigne3)-1] = '\0';
+    }
+
+    // Efface l'astérisque si le délai est écoulé
+    if (showAsterisk && (now - lastAsterisk > ASTERISK_DURATION)) {
+      lcd.setCursor(19, 3);
+      lcd.print(" ");
+      showAsterisk = false;
+    }
   }
 }
