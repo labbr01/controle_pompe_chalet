@@ -640,6 +640,8 @@ char lastEncodedMsg[32] = "";
 unsigned int msgSeq = 0; // Séquentiel 0-999
 unsigned long lastMsgSent = 0;
 unsigned int repeatCount = 0; // Nombre de répétitions du message courant (max 5)
+unsigned int pingCounter = 0; // Compteur pour le ping
+bool pingSent = false;
 
 // ...le reste du code continue sans accolade fermante ici...
 
@@ -677,17 +679,37 @@ void communiquer_chalet() {
   unsigned long now = millis();
   // Compare msgData avec lastEncodedMsg[3..]
   bool msgChanged = strncmp(msgData, lastEncodedMsg + 3, 8) != 0;
+  bool messageEmis = false;
   if (msgChanged) {
     msgSeq = (msgSeq + 1) % 1000;
     strncpy(lastEncodedMsg, msg, sizeof(lastEncodedMsg));
     repeatCount = 1;
     lastMsgSent = now;
-    Serial.print("MSG:");
     Serial.println(msg);
+    pingCounter = 0;
+    pingSent = false;
+    messageEmis = true;
   } else if (repeatCount > 0 && repeatCount < 5 && (now - lastMsgSent >= 1000)) {
     repeatCount++;
     lastMsgSent = now;
-    Serial.print("MSG:");
     Serial.println(lastEncodedMsg);
+    pingCounter = 0;
+    pingSent = false;
+    messageEmis = true;
+  }
+
+  // Si aucun message n'est émis, on incrémente le compteur
+  if (!messageEmis) {
+    pingCounter++;
+    // Émettre le ping de 55 à 59 (5 fois), puis à 60 remettre le compteur à zéro
+    if (pingCounter >= 55 && pingCounter < 60) {
+      char pingMsg[12];
+      memset(pingMsg, '9', sizeof(pingMsg)-1);
+      pingMsg[sizeof(pingMsg)-1] = '\0';
+      Serial.println(pingMsg);
+    }
+    if (pingCounter == 60) {
+      pingCounter = 0;
+    }
   }
 }
