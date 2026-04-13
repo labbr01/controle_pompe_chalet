@@ -1,3 +1,14 @@
+// Blink LED intégrée Arduino Uno
+void setup() {
+  pinMode(LED_BUILTIN, OUTPUT);
+}
+
+void loop() {
+  digitalWrite(LED_BUILTIN, HIGH); // LED ON
+  delay(500);
+  digitalWrite(LED_BUILTIN, LOW);  // LED OFF
+  delay(500);
+}
 // Le classique Blink pour Arduino UNO R4 Minima
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT); // LED intégrée

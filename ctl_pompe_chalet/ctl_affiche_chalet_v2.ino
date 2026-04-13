@@ -4,9 +4,20 @@
 // =============================
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
-#include <SPI.h>
 #include <nRF24L01.h>
 #include <RF24.h>
+
+// =============================
+// FILAGE HARMONISÉ AFFICHEUR (identique au contrôleur)
+// Boutons (4 boutons, reset = dernier) :
+//   - BOUTON 1 : A2 (utilisé en digital)
+//   - BOUTON 2 : D10
+//   - BOUTON 3 : D3
+//   - BOUTON 4 (RESET) : D9
+// Sonde IR : D2
+// I2C LCD : SDA/SCL (pins dédiées Uno R4 Minima)
+// nRF24L01 : CE = D4, CSN = D5
+// =============================
 
 // LCD 20x4 I2C
 LiquidCrystal_I2C lcd(0x27, 20, 4);
@@ -22,6 +33,15 @@ const int POMPE_MAX_CONSEC_MIN = 6; // Doit matcher le maître
 // Statuts texte (doivent matcher le maître)
 const char* statusText[] = {"Oui", "Non", "Oui*", "Non*", "On", "Off", "Chalet", "Purge"};
 
+// =============================
+// Définition des pins boutons (harmonisé avec contrôleur)
+const int PIN_BOUTON_1 = A2;  // A2 (digital)
+const int PIN_BOUTON_2 = 10;  // D10
+const int PIN_BOUTON_3 = 3;   // D3
+const int PIN_BOUTON_4 = 9;   // D9 (RESET)
+// Sonde IR : D2 (à lire côté contrôleur)
+// =============================
+
 void setup() {
   Serial.begin(9600);
   lcd.init();
@@ -29,6 +49,13 @@ void setup() {
   lcd.clear();
   lcd.setCursor(0,0);
   lcd.print("En attente RF...");
+
+  // Initialisation boutons (pullup interne)
+  pinMode(PIN_BOUTON_1, INPUT_PULLUP);
+  pinMode(PIN_BOUTON_2, INPUT_PULLUP);
+  pinMode(PIN_BOUTON_3, INPUT_PULLUP);
+  pinMode(PIN_BOUTON_4, INPUT_PULLUP);
+
   if (!radio.begin()) {
     lcd.clear();
     lcd.setCursor(0,0);
@@ -42,6 +69,14 @@ void setup() {
 }
 
 void loop() {
+  // Lecture boutons (LOW = appuyé)
+  bool bouton1 = (digitalRead(PIN_BOUTON_1) == LOW); // A2
+  bool bouton2 = (digitalRead(PIN_BOUTON_2) == LOW); // D10
+  bool bouton3 = (digitalRead(PIN_BOUTON_3) == LOW); // D3
+  bool bouton4 = (digitalRead(PIN_BOUTON_4) == LOW); // D9 (RESET)
+
+  // TODO : Ajouter la logique d'action sur appui bouton si besoin
+
   if (radio.available()) {
     char msg[16] = "";
     radio.read(&msg, sizeof(msg));
