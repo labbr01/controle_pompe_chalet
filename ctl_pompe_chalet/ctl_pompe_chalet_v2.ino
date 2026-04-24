@@ -175,45 +175,108 @@ unsigned int minutesPauseRestantes = 0;
 unsigned long debutPompage = 0;
 
 void loop() {
+    // Envoi périodique d'un message d'état toutes les 5 secondes, même si la valeur n'a pas changé
+    static unsigned long lastPeriodicState = 0;
+    if (millis() - lastPeriodicState > 5000) {
+      communiquer_chalet();
+      lastPeriodicState = millis();
+    }
   unsigned long now = millis();
 
-  // --- Gestion inconditionnelle du bouton RESET (3s d'appui) ---
-    static unsigned long boutonResetStart = 0;
-    static int lastCountdown = -1;
-    static bool etaitEnReset = false;
-    bool boutonAppuye = (digitalRead(PIN_BOUTON_RESET) == LOW);
+  // --- Réception de messages RF prioritaire à chaque tour de loop ---
+  static char rfMsg[32] = "";
+  if (radio.available()) {
+    radio.read(&rfMsg, sizeof(rfMsg));
+    Serial.print("[RF DEBUG] Message RF reçu: ");
+    Serial.println(rfMsg);
+    if (strcmp(rfMsg, "RESET!") == 0) {
+      Serial.println("[RF DEBUG] Reçu RESET! → envoi RESET_ACK! et reset");
+      sendRFMessage("RESET_ACK!");
+      delay(100); // Laisse le temps à l'ACK de partir
+      NVIC_SystemReset();
+      return;
+    } else if (strcmp(rfMsg, "RESET_ACK!") == 0) {
+      Serial.println("[RF DEBUG] Reçu RESET_ACK! → envoi ACK puis reset");
+      // On effectue le reset logiciel, comme côté afficheur
+      delay(100);
+      NVIC_SystemReset();
+      return;
+    } else if (strcmp(rfMsg, "PING?") == 0) {
+      Serial.println("[RF DEBUG] Reçu PING? → émission état immédiat");
+      communiquer_chalet(); // Toujours répondre, même si la valeur n'a pas changé
+    }
+    memset(rfMsg, 0, sizeof(rfMsg));
+  }
+
+  // --- Gestion du bouton RESET (3s d'appui) synchronisé RF ---
+  static unsigned long boutonResetStart = 0;
+  static int lastCountdown = -1;
+  static bool etaitEnReset = false;
+  static bool resetEnAttenteAck = false;
+  static unsigned long resetAckTimeout = 0;
+  // Durée d'attente ACK après RESET! (0.5 à 2s)
+  const unsigned long RESET_ACK_TIMEOUT_MS = 1000;
+  bool boutonAppuye = (digitalRead(PIN_BOUTON_RESET) == LOW);
+  if (!resetEnAttenteAck) {
+    // Décompte AVANT envoi RESET!
     if (boutonAppuye) {
       if (boutonResetStart == 0) boutonResetStart = millis();
       unsigned long elapsed = millis() - boutonResetStart;
       int countdown = 3 - (int)(elapsed / 1000);
-      if (countdown < 0) countdown = 0;
-      // Affichage du compte à rebours uniquement si changement
+      if (countdown < 1) countdown = 1;
       if (countdown != lastCountdown) {
-    lcd.setCursor(0,0);
-    char ligne[21];
-    snprintf(ligne, sizeof(ligne), "RESET dans %d", countdown+1);
-    lcd.print("                    ");
-    lcd.setCursor(0,0);
-    lcd.print(ligne);
-    lastCountdown = countdown;
+        lcd.setCursor(0,0);
+        char ligne[21];
+        snprintf(ligne, sizeof(ligne), "RESET dans %d", countdown);
+        lcd.print("                    ");
+        lcd.setCursor(0,0);
+        lcd.print(ligne);
+        lastCountdown = countdown;
       }
       etaitEnReset = true;
       if (elapsed >= 3000) {
-        NVIC_SystemReset();
+        // Envoie le message RESET! et attend l'ACK
+        Serial.println("[RESET] Envoi RESET! via RF");
+        radio.stopListening();
+        radio.write("RESET!", 7);
+        radio.startListening();
+        resetEnAttenteAck = true;
+        boutonResetStart = 0;
+        lastCountdown = -1;
+        lcd.setCursor(0,0);
+        lcd.print("RESET EN COURS     ");
+        Serial.println("[RESET] RESET EN COURS...");
+        resetAckTimeout = millis();
       }
+      delay(10);
       return;
     } else {
       if (etaitEnReset) {
-    // Efface la ligne 0 et force le réaffichage normal
-    lcd.setCursor(0,0);
-    lcd.print("                    ");
-    // On force le rafraîchissement complet à la prochaine maj_affichage
-    lastAffichage = 0;
-    etaitEnReset = false;
+        lcd.setCursor(0,0);
+        lcd.print("                    ");
+        lastAffichage = 0;
+        etaitEnReset = false;
       }
       boutonResetStart = 0;
       lastCountdown = -1;
+      resetAckTimeout = 0;
     }
+  } else if (resetEnAttenteAck) {
+    // Après envoi RESET!, on attend juste l'ACK (pas de décompte)
+    lcd.setCursor(0,0);
+    lcd.print("RESET EN COURS     ");
+    if (resetAckTimeout > 0 && millis() - resetAckTimeout > RESET_ACK_TIMEOUT_MS) {
+      Serial.println("[RESET] ACK RESET rate! (timeout)");
+      lcd.setCursor(0,0);
+      lcd.print("ACK RESET rate!   ");
+      delay(1000);
+      lcd.setCursor(0,0);
+      lcd.print("                    ");
+      NVIC_SystemReset();
+    }
+    delay(10);
+    return;
+  }
 
   // Si en attente de redémarrage manuel, on ne fait rien sauf surveiller le bouton
   if (etatAnomalieAir == ATTENTE_REDEMARRAGE) {
@@ -406,9 +469,7 @@ void loop() {
     Serial.print("| debitMoy: ");
     Serial.println(debitMoy, 3);
     maj_affichage(statutAirCourant);
-    ajuster_relais_pompe();
-    ajuster_relais_purge();
-
+    
     // Log de debitMoy juste avant l'envoi du message RF24
     Serial.print("[DEBUG RF24] debitMoy: ");
     Serial.println(debitMoy, 3);
@@ -842,31 +903,24 @@ unsigned int repeatCount = 0; // Nombre de répétitions du message courant (max
 
 // --- Fonction d'envoi RF simple (non intégrée à la logique métier) ---
 bool sendRFMessage(const char* msg) {
-  // Envoie le message via RF24, retourne true si succès
-  bool ok = radio.write(msg, strlen(msg) + 1); // +1 pour le '\0'
-  if (ok) {
-    Serial.print("[RF24] Message envoyé: ");
-    Serial.println(msg);
-  } else {
-    Serial.print("[RF24] Echec envoi: ");
-    Serial.println(msg);
-  }
-  return ok;
-}
-
-// ...le reste du code continue sans accolade fermante ici...
-
-void ajuster_relais_pompe() {
-  // À implémenter : logique de contrôle de la pompe
-}
-
-void ajuster_relais_purge() {
-  // À implémenter : logique de contrôle de la purge
+  // // Envoie le message via RF24, retourne true si succès
+  // radio.stopListening();
+  // bool ok = radio.write(msg, strlen(msg) + 1); // +1 pour le '\0'
+  // radio.startListening();
+  // delay(2); // Laisse le temps au module de repasser en réception
+  // if (ok) {
+  //   Serial.print("[RF24] Message envoyé: ");
+  //   Serial.println(msg);
+  // } else {
+  //   Serial.print("[RF24] Echec envoi: ");
+  //   Serial.println(msg);
+  // }
+  // return ok;
 }
 
 void communiquer_chalet() {
   // Encodage du message compact positionnel :
-  // Format : SSSAPDCMM\n
+  // Format : SSSAPDCMMMM\n
   // SSS = séquentiel (3 chiffres, 000 à 999)
   // A = statut Air (index statusText[])
   // P = statut Pompe (ON/OFF, index statusText[])
@@ -882,22 +936,23 @@ void communiquer_chalet() {
   if (debit > 9) debit = 9;
   int courant = (int)(courantMoy + 0.5);
   if (courant > 9) courant = 9;
+
   unsigned int minPompe = minutesPompageConsecutives;
 
   // Construction du message sans incrémenter la séquence
-  char msg[16];
-  snprintf(msg, sizeof(msg), "%03u%d%d%d%d%02u", msgSeq, idxAir, pompeEtat, debit, courant, minPompe);
+  char msg[18];
+  snprintf(msg, sizeof(msg), "%03u%d%d%d%d%04u", msgSeq, idxAir, pompeEtat, debit, courant, minPompe);
 
   // Construction du message sans la séquence pour détection de changement
-  char msgValues[16];
-  snprintf(msgValues, sizeof(msgValues), "%d%d%d%d%02u", idxAir, pompeEtat, debit, courant, minPompe);
+  char msgValues[18];
+  snprintf(msgValues, sizeof(msgValues), "%d%d%d%d%04u", idxAir, pompeEtat, debit, courant, minPompe);
 
   static char lastMsgValues[16] = "";
   unsigned long now = millis();
   if (strcmp(msgValues, lastMsgValues) != 0) {
     // Valeurs changées, incrémente la séquence
     msgSeq = (msgSeq + 1) % 1000;
-    snprintf(msg, sizeof(msg), "%03u%d%d%d%d%02u", msgSeq, idxAir, pompeEtat, debit, courant, minPompe);
+    snprintf(msg, sizeof(msg), "%03u%d%d%d%d%04u", msgSeq, idxAir, pompeEtat, debit, courant, minPompe);
     strncpy(lastEncodedMsg, msg, sizeof(lastEncodedMsg));
     strncpy(lastMsgValues, msgValues, sizeof(lastMsgValues));
     repeatCount = 1;
