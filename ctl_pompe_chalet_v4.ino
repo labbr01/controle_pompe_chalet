@@ -948,9 +948,12 @@ void maj_affichage(int statutAirCourant) {
       // Affichage courant format I:5.23A, aligné à droite
       char courantStr[8];
       snprintf(courantStr, sizeof(courantStr), "I:%1.2fA", courantMoy);
-      // Débit : fronts montants/seconde (même métrique que l'afficheur RF)
-      // nbDebitOn évité : signal bloqué à HIGH donnerait 10/10 à tort
-      snprintf(ligne3, 21, "Debit: %2d/10 %-7s", debitImpulsions, courantStr);
+      // Compose la ligne: "Debit:  7/10 I:5.23A"
+      //snprintf(ligne3, 21, "Debit: %2d/10 %-7s", debitAffiche, courantStr);
+      // format affichage nombre d'échantillon sur 10 avec signal hight
+      // snprintf(ligne3, 21, "Debit: %2d/s %-7s", debitImpulsions, courantStr);
+      // Format d'affichage du débit d/10 de 0 à 10, basé sur le nombre d'impulsions dans le buffer (0 à 10)
+      snprintf(ligne3, 21, "Debit: %2d/10 %-7s", nbDebitOn, courantStr);
       ligne3[20] = '\0';
       lcd.setCursor(0, 3); lcd.print(ligne3);
     } else {
@@ -963,7 +966,7 @@ void maj_affichage(int statutAirCourant) {
       int debitAffiche = (nbZero == 0) ? 0 : (int)(debitMoy * 10 + 0.5);
       char courantStr[8];
       snprintf(courantStr, sizeof(courantStr), "I:%1.2fA", courantMoy);
-      snprintf(ligne3, 21, "Debit:%s %2d/10%-7s", bufStr, debitImpulsions, courantStr);
+      snprintf(ligne3, 21, "Debit:%s %2d/10%-7s", bufStr, debitAffiche, courantStr);
       ligne3[20] = '\0';
       lcd.setCursor(0, 3); lcd.print(ligne3);
     }
@@ -997,8 +1000,9 @@ void communiquer_chalet() {
 
   int idxAir = evaluerStatutAir(true);
   int pompeEtat = capteurs.RelaisPompe == LOW ? 4 : 5;
-  int debit = debitImpulsions;
-  if (debit > 9) debit = 9;
+  int debit = 0;
+  for (int i = 0; i < NBUF; i++) debit += bufDebit[i]; // nbDebitOn : même métrique que l'affichage LCD
+  if (debit > 10) debit = 10;
   int courantDix = (int)(courantMoy * 10.0 + 0.5);
   if (courantDix < 0) courantDix = 0;
   if (courantDix > 99) courantDix = 99;
