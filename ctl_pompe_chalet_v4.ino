@@ -953,7 +953,8 @@ void maj_affichage(int statutAirCourant) {
       // format affichage nombre d'échantillon sur 10 avec signal hight
       // snprintf(ligne3, 21, "Debit: %2d/s %-7s", debitImpulsions, courantStr);
       // Format d'affichage du débit d/10 de 0 à 10, basé sur le nombre d'impulsions dans le buffer (0 à 10)
-      snprintf(ligne3, 21, "Debit: %2d/10 %-7s", nbDebitOn, courantStr);
+      int debitDisplay = (nbDebitOn == NBUF && courantMoyenne < 1.0f) ? 0 : nbDebitOn;
+      snprintf(ligne3, 21, "Debit: %2d/10 %-7s", debitDisplay, courantStr);
       ligne3[20] = '\0';
       lcd.setCursor(0, 3); lcd.print(ligne3);
     } else {
@@ -1002,6 +1003,7 @@ void communiquer_chalet() {
   int pompeEtat = capteurs.RelaisPompe == LOW ? 4 : 5;
   int debit = 0;
   for (int i = 0; i < NBUF; i++) debit += bufDebit[i]; // nbDebitOn : même métrique que l'affichage LCD
+  if (debit == NBUF && courantMoy < 1.0f) debit = 0; // signal bloqué: courant < 1A = pas de pompage
   if (debit > 10) debit = 10;
   int courantDix = (int)(courantMoy * 10.0 + 0.5);
   if (courantDix < 0) courantDix = 0;
