@@ -984,8 +984,8 @@ bool sendRFMessage(const char* msg) {
 
 
 void communiquer_chalet() {
-  // Format : SSSAPDCCPPPPMMMMFGAA  (20 chars + null)
-  // SSS=seq, A=air, P=pompe, D=debit, CC=courant dix., PPPP=pression, MMMM=minutes, F=flagPurge, G=flagPompeOff, AA=airCount
+  // Format : SSSAPDDCCPPPPMMMMFGAA  (21 chars + null)
+  // SSS=seq, A=air, P=pompe, DD=debit (00-10), CC=courant dix., PPPP=pression, MMMM=minutes, F=flagPurge, G=flagPompeOff, AA=airCount
 
   int idxAir = evaluerStatutAir(true);
   int pompeEtat = capteurs.RelaisPompe == LOW ? 4 : 5;
@@ -1005,12 +1005,12 @@ void communiquer_chalet() {
   if (airCount > 99) airCount = 99;
 
   char msg[24];
-  snprintf(msg, sizeof(msg), "%03u%d%d%d%02d%04d%04u%d%d%02d",
+  snprintf(msg, sizeof(msg), "%03u%d%d%02d%02d%04d%04u%d%d%02d",
            msgSeq, idxAir, pompeEtat, debit, courantDix, pression, minPompe, flagPurge, flagPompeOff, airCount);
 
   // Champs stables (sans courant/pression qui fluctuent)
   char msgStable[14];
-  snprintf(msgStable, sizeof(msgStable), "%d%d%d%04u%d%d", idxAir, pompeEtat, debit, minPompe, flagPurge, flagPompeOff);
+  snprintf(msgStable, sizeof(msgStable), "%d%d%02d%04u%d%d", idxAir, pompeEtat, debit, minPompe, flagPurge, flagPompeOff);
 
   static char lastMsgStable[14] = "";
   static int  lastCourantDix    = -999;
@@ -1026,7 +1026,7 @@ void communiquer_chalet() {
   if (forceSendEtat || stableChange || (delaiOk && (courantChange || pressionChange))) {
     forceSendEtat = false;
     msgSeq = (msgSeq + 1) % 1000;
-    snprintf(msg, sizeof(msg), "%03u%d%d%d%02d%04d%04u%d%d%02d",
+    snprintf(msg, sizeof(msg), "%03u%d%d%02d%02d%04d%04u%d%d%02d",
              msgSeq, idxAir, pompeEtat, debit, courantDix, pression, minPompe, flagPurge, flagPompeOff, airCount);
     strncpy(lastMsgStable, msgStable, sizeof(lastMsgStable));
     lastCourantDix = courantDix;

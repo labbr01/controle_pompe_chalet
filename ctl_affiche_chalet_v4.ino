@@ -2,11 +2,11 @@
 // ctl_affiche_chalet_v4.ino
 // Afficheur aligné sur ctl_pompe_chalet_v4
 //
-// Protocole reçu (pompe → afficheur) : SSSAPDCCPPPPMMMMFGAA (positionnel, 20 chars)
+// Protocole reçu (pompe → afficheur) : SSSAPDDCCPPPPMMMMFGAA (positionnel, 21 chars)
 //   SSS  = séquence 000-999
 //   A    = statut Air (0=Oui 1=Non 2=Oui* 3=Non*)
 //   P    = statut Pompe (4=On 5=Off)
-//   D    = débit 0-9
+//   DD   = débit 00-10 (2 chars)
 //   CC   = courant en dixièmes (00-99 → 0.0-9.9A)
 //   PPPP = pression brute (0000-1023)
 //   MMMM = minutes pompage consécutives
@@ -161,7 +161,7 @@ void loop() {
 // Parse le message compact positionnel SSSAPDCCPPPPMMMMFG (18 chars)
 // =============================
 void parseMessage(const char* msg) {
-  if (strlen(msg) < 20) {
+  if (strlen(msg) < 21) {
     //Serial.print("[PARSE] Message trop court: "); //Serial.println(msg);
     return;
   }
@@ -169,23 +169,24 @@ void parseMessage(const char* msg) {
   g_seq       = atoi(seqStr);
   g_idxAir    = msg[3] - '0';
   g_idxPompe  = msg[4] - '0';
-  g_debit     = msg[5] - '0';
-  char ccStr[3]  = {msg[6], msg[7], '\0'};
+  char dStr[3]   = {msg[5], msg[6], '\0'};
+  g_debit        = atoi(dStr);
+  char ccStr[3]  = {msg[7], msg[8], '\0'};
   g_courantDix   = atoi(ccStr);
-  char ppStr[5]  = {msg[8], msg[9], msg[10], msg[11], '\0'};
+  char ppStr[5]  = {msg[9], msg[10], msg[11], msg[12], '\0'};
   g_pression     = atoi(ppStr);
-  char minStr[5] = {msg[12], msg[13], msg[14], msg[15], '\0'};
+  char minStr[5] = {msg[13], msg[14], msg[15], msg[16], '\0'};
   g_minPompe     = atoi(minStr);
-  g_flagPurge    = msg[16] - '0';
-  g_flagPompeOff = msg[17] - '0';
-  char aaStr[3]  = {msg[18], msg[19], '\0'};
+  g_flagPurge    = msg[17] - '0';
+  g_flagPompeOff = msg[18] - '0';
+  char aaStr[3]  = {msg[19], msg[20], '\0'};
   g_airCount     = atoi(aaStr);
   g_dataRecu     = true;
 
   // Validation
   if (g_idxAir       < 0 || g_idxAir       > 3)    g_idxAir       = 1;
   if (g_idxPompe     < 4 || g_idxPompe     > 5)    g_idxPompe     = 5;
-  if (g_debit        < 0 || g_debit        > 9)    g_debit        = 0;
+  if (g_debit        < 0 || g_debit        > 10)   g_debit        = 0;
   if (g_courantDix   < 0 || g_courantDix   > 99)   g_courantDix   = 0;
   if (g_pression     < 0 || g_pression     > 1023) g_pression     = 0;
   if (g_flagPurge    < 0 || g_flagPurge    > 1)    g_flagPurge    = 0;
