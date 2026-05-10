@@ -185,7 +185,7 @@ void parseMessage(const char* msg) {
 
   // Validation
   if (g_idxAir       < 0 || g_idxAir       > 3)    g_idxAir       = 1;
-  if (g_idxPompe     < 4 || g_idxPompe     > 5)    g_idxPompe     = 5;
+  if (g_idxPompe     < 4 || g_idxPompe     > 6)    g_idxPompe     = 5; // 6 = arrêt thermique permanent
   if (g_debit        < 0 || g_debit        > 10)   g_debit        = 0;
   if (g_courantDix   < 0 || g_courantDix   > 99)   g_courantDix   = 0;
   if (g_pression     < 0 || g_pression     > 1023) g_pression     = 0;
@@ -199,6 +199,17 @@ void parseMessage(const char* msg) {
 // =============================
 void updateAffichage() {
   if (!g_dataRecu) return;
+
+  // Arrêt thermique permanent : écran dédié, identique au contrôleur de pompe
+  if (g_idxPompe == 6) {
+    lcd.clear();
+    lcd.setCursor(0,0); lcd.print("SURCHARGE THERMIQUE");
+    lcd.setCursor(0,1); lcd.print("Pompe COUPEE");
+    lcd.setCursor(0,2); lcd.print("Redemarrage");
+    lcd.setCursor(0,3); lcd.print("manuel requis");
+    return;
+  }
+
   char buf[21];
 
   // Ligne 0 : même format que maj_affichage() sur la pompe

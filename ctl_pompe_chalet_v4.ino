@@ -46,15 +46,27 @@ const char* statusText[] = {"Oui", "Non", "Oui*", "Non*", "On", "Off", "Chalet",
 
 // === CONSTANTES AJUSTABLES (délais, temps, protections) ===
 // Leaky bucket - protection thermique
-// Net pompe ON: +0.75/min → plein en 40 min  |  Net pompe OFF: -0.25/min → vide en 120 min
-const float LEAKY_BUCKET_MAX  = 6.0;   // Test: 6.0   | Prod: 30.0
-const float LEAKY_BUCKET_FILL = 1.0;   // +1.0/intervalle quand pompe vraiment active
-const float LEAKY_BUCKET_LEAK = 0.25;  // -0.25/intervalle toujours (fuite)
-const int   POMPE_PAUSE_MIN   = 1;     // Test: 1 min  | Prod: 10 min
-const unsigned long LEAKY_BUCKET_INTERVAL_MS = 10000UL; // Test: 10s | Prod: 60000UL (1 min)
+// Pompage: net +0.75/min → plein en 40 min | pause forcée: -2.0/min → vide 67% en 10 min (bucket 30→10)
+// Leaky bucket pour test (INTERVAL=10s → 6x plus rapide; même ratios comportementaux)
+const float LEAKY_BUCKET_MAX        = 6.0;
+const float LEAKY_BUCKET_FILL       = 1.0;
+const float LEAKY_BUCKET_LEAK       = 0.25;    // pendant pompage (hors pause)
+const float LEAKY_BUCKET_LEAK_PAUSE = 0.667f;  // pendant pause forcée (~67% de MAX en 1 min / 6 ticks)
+const int   POMPE_PAUSE_MIN         = 1;
+const unsigned long LEAKY_BUCKET_INTERVAL_MS = 10000UL;
+// Fin de test
+
+// Leaky bucket pour prod
+// const float LEAKY_BUCKET_MAX        = 30.0;
+// const float LEAKY_BUCKET_FILL       = 1.0;
+// const float LEAKY_BUCKET_LEAK       = 0.25;  // pendant pompage (hors pause)
+// const float LEAKY_BUCKET_LEAK_PAUSE = 2.0;   // pendant pause forcée (vide 67% en 10 min: 30→10)
+// const int   POMPE_PAUSE_MIN         = 10;
+// const unsigned long LEAKY_BUCKET_INTERVAL_MS = 60000UL;
+// Fin de prod
+
 // Temps théorique pour remplir le bucket (affichage LCD uniquement) : MAX / (FILL - LEAK)
 const int   POMPE_DISPLAY_MAX_MIN = (int)(LEAKY_BUCKET_MAX / (LEAKY_BUCKET_FILL - LEAKY_BUCKET_LEAK) + 0.5f);
-// Pour archivage : remettre LEAKY_BUCKET_MAX=30.0, POMPE_PAUSE_MIN=10, LEAKY_BUCKET_INTERVAL_MS=60000UL
 
 // Délais (en ms) pour la gestion d'anomalie d'air
 const unsigned long DELAI_AIR_OUI = 15000;      // 15s (au lieu de 30s)
@@ -238,6 +250,7 @@ void setup() {
 float leakyBucket = 0.0;             // Niveau courant du bucket (0.0 à LEAKY_BUCKET_MAX)
 int   cyclesThermiquesConsecutifs = 0; // Nombre de cycles complets consécutifs (reset quand bucket = 0)
 bool  pompeArretPermanent = false;   // true = 2 cycles consécutifs complets → reset manuel requis
+unsigned long lastBucketUpdate = 0;  // Partagé pause+actif pour que la fuite s'applique pendant la pause
 unsigned int minutesPompageConsecutives = 0;
 bool pauseThermiqueActive = false;
 unsigned long debutPauseThermique = 0;
@@ -413,6 +426,12 @@ void handleAffichage(unsigned long now) {
       } else {
         digitalWrite(PIN_RELAIS_POMPE, HIGH);
       }
+      // Leaky bucket : fuite rapide pendant la pause forcée (pompe OFF, pas de fill)
+      if (now - lastBucketUpdate >= LEAKY_BUCKET_INTERVAL_MS) {
+        lastBucketUpdate = now;
+        leakyBucket -= LEAKY_BUCKET_LEAK_PAUSE;
+        if (leakyBucket < 0.0f) leakyBucket = 0.0f;
+      }
       // Affichage uniquement
       maj_affichage(0); // Statut Air = Oui (ou autre valeur neutre)
       return;
@@ -455,7 +474,6 @@ void handleAffichage(unsigned long now) {
 
     // --- Leaky bucket : protection thermique ---
     // Chaque minute : +FILL si pompe ON, -LEAK toujours. Bucket vide = reset cycles consécutifs.
-    static unsigned long lastBucketUpdate = 0;
     if (now - lastBucketUpdate >= LEAKY_BUCKET_INTERVAL_MS) {
       lastBucketUpdate = now;
       if (pompeVraimentActive) leakyBucket += LEAKY_BUCKET_FILL;
@@ -1001,7 +1019,7 @@ void communiquer_chalet() {
   // SSS=seq, A=air, P=pompe, DD=debit (00-10), CC=courant dix., PPPP=pression, MMMM=minutes, F=flagPurge, G=flagPompeOff, AA=airCount
 
   int idxAir = evaluerStatutAir(true);
-  int pompeEtat = capteurs.RelaisPompe == LOW ? 4 : 5;
+  int pompeEtat = pompeArretPermanent ? 6 : (capteurs.RelaisPompe == LOW ? 4 : 5);
   int debit = 0;
   for (int i = 0; i < NBUF; i++) debit += bufDebit[i]; // nbDebitOn : même métrique que l'affichage LCD
   if (debit == NBUF && courantMoy < 1.0f) debit = 0; // signal bloqué: courant < 1A = pas de pompage
