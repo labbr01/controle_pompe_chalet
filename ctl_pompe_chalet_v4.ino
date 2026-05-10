@@ -948,12 +948,9 @@ void maj_affichage(int statutAirCourant) {
       // Affichage courant format I:5.23A, aligné à droite
       char courantStr[8];
       snprintf(courantStr, sizeof(courantStr), "I:%1.2fA", courantMoy);
-      // Compose la ligne: "Debit:  7/10 I:5.23A"
-      //snprintf(ligne3, 21, "Debit: %2d/10 %-7s", debitAffiche, courantStr);
-      // format affichage nombre d'échantillon sur 10 avec signal hight
-      // snprintf(ligne3, 21, "Debit: %2d/s %-7s", debitImpulsions, courantStr);
-      // Format d'affichage du débit d/10 de 0 à 10, basé sur le nombre d'impulsions dans le buffer (0 à 10)
-      snprintf(ligne3, 21, "Debit: %2d/10 %-7s", nbDebitOn, courantStr);
+      // Débit : fronts montants/seconde (même métrique que l'afficheur RF)
+      // nbDebitOn évité : signal bloqué à HIGH donnerait 10/10 à tort
+      snprintf(ligne3, 21, "Debit: %2d/10 %-7s", debitImpulsions, courantStr);
       ligne3[20] = '\0';
       lcd.setCursor(0, 3); lcd.print(ligne3);
     } else {
@@ -966,7 +963,7 @@ void maj_affichage(int statutAirCourant) {
       int debitAffiche = (nbZero == 0) ? 0 : (int)(debitMoy * 10 + 0.5);
       char courantStr[8];
       snprintf(courantStr, sizeof(courantStr), "I:%1.2fA", courantMoy);
-      snprintf(ligne3, 21, "Debit:%s %2d/10%-7s", bufStr, debitAffiche, courantStr);
+      snprintf(ligne3, 21, "Debit:%s %2d/10%-7s", bufStr, debitImpulsions, courantStr);
       ligne3[20] = '\0';
       lcd.setCursor(0, 3); lcd.print(ligne3);
     }
