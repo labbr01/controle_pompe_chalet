@@ -45,9 +45,15 @@ const int PIN_BOUTON_3 = 3;
 const char* statusText[] = {"Oui", "Non", "Oui*", "Non*", "On", "Off", "Chalet", "Purge"};
 
 // === CONSTANTES AJUSTABLES (délais, temps, protections) ===
-const int POMPE_MAX_CONSEC_MIN = 6;      // 2 min ON consécutives max (test)
-const int POMPE_PAUSE_MIN = 3;           // Pause forcée 3 min (test)
-// Pour archivage : remettre 20/60 min
+// Leaky bucket - protection thermique
+// Net pompe ON: +0.75/min → plein en 40 min  |  Net pompe OFF: -0.25/min → vide en 120 min
+const float LEAKY_BUCKET_MAX  = 6.0;  // Test: 6.0  | Prod: 30.0
+const float LEAKY_BUCKET_FILL = 1.0;  // +1.0/min quand pompe vraiment active
+const float LEAKY_BUCKET_LEAK = 0.25; // -0.25/min toujours (fuite)
+const int   POMPE_PAUSE_MIN   = 3;    // Test: 3 min | Prod: 10 min
+// Temps théorique pour remplir le bucket (affichage LCD uniquement) : MAX / (FILL - LEAK)
+const int   POMPE_DISPLAY_MAX_MIN = (int)(LEAKY_BUCKET_MAX / (LEAKY_BUCKET_FILL - LEAKY_BUCKET_LEAK) + 0.5f);
+// Pour archivage : remettre LEAKY_BUCKET_MAX=30.0 et POMPE_PAUSE_MIN=10
 
 // Délais (en ms) pour la gestion d'anomalie d'air
 const unsigned long DELAI_AIR_OUI = 15000;      // 15s (au lieu de 30s)
@@ -227,7 +233,10 @@ void setup() {
   lastDebitState = capteurs.Debit;
 }
 
-// --- Variables pour la protection thermique ---
+// --- Variables pour la protection thermique (leaky bucket) ---
+float leakyBucket = 0.0;             // Niveau courant du bucket (0.0 à LEAKY_BUCKET_MAX)
+int   cyclesThermiquesConsecutifs = 0; // Nombre de cycles complets consécutifs (reset quand bucket = 0)
+bool  pompeArretPermanent = false;   // true = 2 cycles consécutifs complets → reset manuel requis
 unsigned int minutesPompageConsecutives = 0;
 bool pauseThermiqueActive = false;
 unsigned long debutPauseThermique = 0;
@@ -366,6 +375,14 @@ void handleAffichage(unsigned long now) {
         lcd.setCursor(0,3); lcd.print("manuel requis");
         return;
     }
+    if (pompeArretPermanent) {
+        lcd.clear();
+        lcd.setCursor(0,0); lcd.print("SURCHARGE THERMIQUE");
+        lcd.setCursor(0,1); lcd.print("Pompe COUPEE");
+        lcd.setCursor(0,2); lcd.print("Redemarrage");
+        lcd.setCursor(0,3); lcd.print("manuel requis");
+        return;
+    }
 
     // Si pause thermique active, on n'interprète rien, on affiche juste l'état de pause
     static bool pauseThermiqueLogEntree = false;
@@ -413,61 +430,55 @@ void handleAffichage(unsigned long now) {
     int statutAirCourant = evaluerStatutAir(true); // PompeEnMarche = true (à adapter)
     gestionAnomalieAir(statutAirCourant);
 
-    // --- Nouvelle logique robuste pour le compteur de minutes consécutives ---
-    // Critère : débit > 0 ET courant > seuil (pompe vraiment active)
-    const float COURANT_POMPE_SEUIL = 0.5; // Ampères, à ajuster selon ton installation
+    // --- Détection pompe vraiment active : débit + courant ---
+    const float COURANT_POMPE_SEUIL = 0.5; // Ampères
     int nbDebitOn = 0;
     for (int i = 0; i < NBUF; i++) nbDebitOn += bufDebit[i];
     float courantMoyenne = 0;
     for (int i = 0; i < NBUF; i++) courantMoyenne += bufCourant[i];
     courantMoyenne /= NBUF;
-    //bool pompeVraimentActive = (nbDebitOn > 0) && (courantMoyenne > COURANT_POMPE_SEUIL);
     bool pompeVraimentActive = (debitImpulsions > 0) && (courantMoyenne > COURANT_POMPE_SEUIL);
-    static unsigned long tempsPause = 0;
-    static bool enPause = false;
-    static bool sortieDePause = false;
-    static unsigned long tempsDernierPompageOff = 0;
 
-    if (sortieDePause) {
-      if (pompeVraimentActive) {
-        debutPompage = now;
-        minutesPompageConsecutives = 0;
-        sortieDePause = false;
-      }
+    // --- Suivi debutPompage pour affichage chrono LCD ---
+    static unsigned long tempsDernierPompageOff = 0;
+    if (pompeVraimentActive) {
+      if (debutPompage == 0) debutPompage = now;
+      tempsDernierPompageOff = 0;
     } else {
-      if (pompeVraimentActive) {
-        if (debutPompage == 0) {
-          debutPompage = now;
-          minutesPompageConsecutives = 0;
-        }
-        // Si la pompe était OFF récemment (<5s), on met juste en pause le compteur
-        if (tempsDernierPompageOff && (now - tempsDernierPompageOff < DUREE_NON_POMPAGE_RESET_MS)) {
-          // On ne fait rien, compteur en pause
-        } else {
-          unsigned long elapsed = now - debutPompage;
-          unsigned int newMinutes = elapsed / 60000UL;
-          if (newMinutes != minutesPompageConsecutives) {
-            minutesPompageConsecutives = newMinutes;
-          }
-        }
-        tempsDernierPompageOff = 0;
-      } else {
-        // Pompe OFF : on ne reset pas tout de suite, on attend 5s
-        if (!tempsDernierPompageOff) tempsDernierPompageOff = now;
-        if (now - tempsDernierPompageOff >= DUREE_NON_POMPAGE_RESET_MS) {
-          debutPompage = 0;
-          minutesPompageConsecutives = 0;
-        }
+      if (!tempsDernierPompageOff) tempsDernierPompageOff = now;
+      if (now - tempsDernierPompageOff >= DUREE_NON_POMPAGE_RESET_MS) {
+        debutPompage = 0;
+        minutesPompageConsecutives = 0;
       }
-      // Déclenche la pause thermique si limite atteinte
-      if (minutesPompageConsecutives >= POMPE_MAX_CONSEC_MIN) {
-        pauseThermiqueActive = true;
-        debutPauseThermique = now;
-        minutesPauseRestantes = POMPE_PAUSE_MIN;
-        digitalWrite(PIN_RELAIS_POMPE, HIGH);
-        if (purgeManuelleActive) {
-          purgeManuelleActive = false;
-          digitalWrite(PIN_RELAIS_PURGE, LOW);
+    }
+
+    // --- Leaky bucket : protection thermique ---
+    // Chaque minute : +FILL si pompe ON, -LEAK toujours. Bucket vide = reset cycles consécutifs.
+    static unsigned long lastBucketUpdate = 0;
+    if (now - lastBucketUpdate >= 60000UL) {
+      lastBucketUpdate = now;
+      if (pompeVraimentActive) leakyBucket += LEAKY_BUCKET_FILL;
+      leakyBucket -= LEAKY_BUCKET_LEAK;
+      if (leakyBucket <= 0.0f) {
+        leakyBucket = 0.0f;
+        cyclesThermiquesConsecutifs = 0; // Bucket vide = pas de 2 cycles consécutifs
+      }
+      if (leakyBucket > LEAKY_BUCKET_MAX) leakyBucket = LEAKY_BUCKET_MAX;
+      // Déclenche pause ou arrêt permanent si bucket plein
+      if (leakyBucket >= LEAKY_BUCKET_MAX && !pauseThermiqueActive && !pompeArretPermanent) {
+        cyclesThermiquesConsecutifs++;
+        if (cyclesThermiquesConsecutifs >= 2) {
+          // 2 cycles consécutifs complets = arrêt permanent, reset manuel requis
+          pompeArretPermanent = true;
+          digitalWrite(PIN_RELAIS_POMPE, HIGH);
+          if (purgeManuelleActive) { purgeManuelleActive = false; digitalWrite(PIN_RELAIS_PURGE, LOW); }
+        } else {
+          // 1er cycle complet = pause thermique
+          pauseThermiqueActive = true;
+          debutPauseThermique = now;
+          minutesPauseRestantes = POMPE_PAUSE_MIN;
+          digitalWrite(PIN_RELAIS_POMPE, HIGH);
+          if (purgeManuelleActive) { purgeManuelleActive = false; digitalWrite(PIN_RELAIS_PURGE, LOW); }
         }
       }
     }
@@ -822,7 +833,7 @@ void maj_affichage(int statutAirCourant) {
         lastDisplayedSec = elapsedSec;
         unsigned int min = elapsedSec / 60;
         unsigned int sec = elapsedSec % 60;
-        snprintf(dernierAffichageSec, sizeof(dernierAffichageSec), "%02u'%02u/%02u", min, sec, POMPE_MAX_CONSEC_MIN);
+        snprintf(dernierAffichageSec, sizeof(dernierAffichageSec), "%02u'%02u/%02u", min, sec, POMPE_DISPLAY_MAX_MIN);
       }
       snprintf(ligne1, 21, "Pompage:Oui %s", dernierAffichageSec);
       pompageOui = true;
@@ -847,7 +858,7 @@ void maj_affichage(int statutAirCourant) {
           lastDisplayedSec = elapsedSec;
           unsigned int min = elapsedSec / 60;
           unsigned int sec = elapsedSec % 60;
-          snprintf(dernierAffichageSec, sizeof(dernierAffichageSec), "%02u'%02u/%02u", min, sec, POMPE_MAX_CONSEC_MIN);
+          snprintf(dernierAffichageSec, sizeof(dernierAffichageSec), "%02u'%02u/%02u", min, sec, POMPE_DISPLAY_MAX_MIN);
         }
         snprintf(ligne1, 21, "Pompage:Oui %s", dernierAffichageSec);
         pompageOui = true;
@@ -910,7 +921,7 @@ void maj_affichage(int statutAirCourant) {
       }
     }
     if (compteurLCDaZero) {
-      snprintf(compteurFinal, sizeof(compteurFinal), "00'00/%02u", POMPE_MAX_CONSEC_MIN);
+      snprintf(compteurFinal, sizeof(compteurFinal), "00'00/%02u", POMPE_DISPLAY_MAX_MIN);
       if (pauseThermiqueActive) {
         snprintf(ligne1, 21, "Pompage:Non* %s", compteurFinal);
       } else {
