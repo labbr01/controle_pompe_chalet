@@ -47,23 +47,23 @@ const char* statusText[] = {"Oui", "Non", "Oui*", "Non*", "On", "Off", "Chalet",
 // === CONSTANTES AJUSTABLES (délais, temps, protections) ===
 // Leaky bucket - protection thermique
 // Pompage: net +0.75/min → plein en 40 min | pause forcée: -2.0/min → vide 67% en 10 min (bucket 30→10)
-// Leaky bucket pour test (INTERVAL=10s → 6x plus rapide; même ratios comportementaux)
-const float LEAKY_BUCKET_MAX        = 6.0;
-const float LEAKY_BUCKET_FILL       = 1.0;
-const float LEAKY_BUCKET_LEAK       = 0.25;    // pendant pompage (hors pause)
-const float LEAKY_BUCKET_LEAK_PAUSE = 0.667f;  // pendant pause forcée (~67% de MAX en 1 min / 6 ticks)
-const int   POMPE_PAUSE_MIN         = 1;
-const unsigned long LEAKY_BUCKET_INTERVAL_MS = 10000UL;
-// Fin de test
-
 // Leaky bucket pour prod
-// const float LEAKY_BUCKET_MAX        = 30.0;
-// const float LEAKY_BUCKET_FILL       = 1.0;
-// const float LEAKY_BUCKET_LEAK       = 0.25;  // pendant pompage (hors pause)
-// const float LEAKY_BUCKET_LEAK_PAUSE = 2.0;   // pendant pause forcée (vide 67% en 10 min: 30→10)
-// const int   POMPE_PAUSE_MIN         = 10;
-// const unsigned long LEAKY_BUCKET_INTERVAL_MS = 60000UL;
+const float LEAKY_BUCKET_MAX        = 30.0;
+const float LEAKY_BUCKET_FILL       = 1.0;
+const float LEAKY_BUCKET_LEAK       = 0.25;  // pendant pompage (hors pause)
+const float LEAKY_BUCKET_LEAK_PAUSE = 2.0;   // pendant pause forcée (vide 67% en 10 min: 30→10)
+const int   POMPE_PAUSE_MIN         = 10;
+const unsigned long LEAKY_BUCKET_INTERVAL_MS = 60000UL;
 // Fin de prod
+
+// Leaky bucket pour test (INTERVAL=10s → 6x plus rapide; même ratios comportementaux)
+// const float LEAKY_BUCKET_MAX        = 6.0;
+// const float LEAKY_BUCKET_FILL       = 1.0;
+// const float LEAKY_BUCKET_LEAK       = 0.25;    // pendant pompage (hors pause)
+// const float LEAKY_BUCKET_LEAK_PAUSE = 0.667f;  // pendant pause forcée (~67% de MAX en 1 min / 6 ticks)
+// const int   POMPE_PAUSE_MIN         = 1;
+// const unsigned long LEAKY_BUCKET_INTERVAL_MS = 10000UL;
+// Fin de test
 
 // Temps théorique pour remplir le bucket (affichage LCD uniquement) : MAX / (FILL - LEAK)
 const int   POMPE_DISPLAY_MAX_MIN = (int)(LEAKY_BUCKET_MAX / (LEAKY_BUCKET_FILL - LEAKY_BUCKET_LEAK) + 0.5f);
