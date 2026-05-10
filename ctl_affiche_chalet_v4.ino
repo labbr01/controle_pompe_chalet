@@ -104,8 +104,10 @@ void setup() {
     //Serial.println("[RF24] FAIL");
     while (1);
   }
-  radio.setPALevel(RF24_PA_LOW);
-  radio.setDataRate(RF24_1MBPS);
+  radio.setPALevel(RF24_PA_LOW);    // LOW = stable, reset 2-way OK
+  //radio.setPALevel(RF24_PA_HIGH);  // HIGH = a tester au chalet si portee insuffisante
+  radio.setDataRate(RF24_250KBPS);  // 250KBPS = meilleure sensibilité/portée; 1MBPS si instable
+  radio.setChannel(108);            // Canal 108 (hors Wi-Fi 2.4GHz)
   // Modèle deux pipes : TX commandes sur "00002", RX état sur "00001"
   // openReadingPipe(0) APRES openWritingPipe pour que pipe0_reading_address soit correct
   radio.openWritingPipe(adresseCmd);      // TX vers pompe sur 00002

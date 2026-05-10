@@ -225,8 +225,10 @@ void setup() {
   if (!radio.begin()) {
     //Serial.println("[RF24] Erreur d'initialisation du module radio!");
   } else {
-    radio.setPALevel(RF24_PA_LOW); // Puissance basse pour tests
-    radio.setDataRate(RF24_1MBPS); // Débit standard
+    radio.setPALevel(RF24_PA_LOW);    // LOW = stable, reset 2-way OK
+    //radio.setPALevel(RF24_PA_HIGH);  // HIGH = a tester au chalet si portee insuffisante
+    radio.setDataRate(RF24_250KBPS);  // 250KBPS = meilleure sensibilité/portée; 1MBPS si instable
+    radio.setChannel(108);            // Canal 108 (hors Wi-Fi 2.4GHz)
     const byte adresse[6] = "00001"; // État pompe → afficheur
     radio.openReadingPipe(0, adresse);
     const byte adresseCmd[6] = "00002"; // Commandes afficheur → pompe
