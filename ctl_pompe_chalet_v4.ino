@@ -47,13 +47,14 @@ const char* statusText[] = {"Oui", "Non", "Oui*", "Non*", "On", "Off", "Chalet",
 // === CONSTANTES AJUSTABLES (délais, temps, protections) ===
 // Leaky bucket - protection thermique
 // Net pompe ON: +0.75/min → plein en 40 min  |  Net pompe OFF: -0.25/min → vide en 120 min
-const float LEAKY_BUCKET_MAX  = 6.0;  // Test: 6.0  | Prod: 30.0
-const float LEAKY_BUCKET_FILL = 1.0;  // +1.0/min quand pompe vraiment active
-const float LEAKY_BUCKET_LEAK = 0.25; // -0.25/min toujours (fuite)
-const int   POMPE_PAUSE_MIN   = 3;    // Test: 3 min | Prod: 10 min
+const float LEAKY_BUCKET_MAX  = 6.0;   // Test: 6.0   | Prod: 30.0
+const float LEAKY_BUCKET_FILL = 1.0;   // +1.0/intervalle quand pompe vraiment active
+const float LEAKY_BUCKET_LEAK = 0.25;  // -0.25/intervalle toujours (fuite)
+const int   POMPE_PAUSE_MIN   = 1;     // Test: 1 min  | Prod: 10 min
+const unsigned long LEAKY_BUCKET_INTERVAL_MS = 10000UL; // Test: 10s | Prod: 60000UL (1 min)
 // Temps théorique pour remplir le bucket (affichage LCD uniquement) : MAX / (FILL - LEAK)
 const int   POMPE_DISPLAY_MAX_MIN = (int)(LEAKY_BUCKET_MAX / (LEAKY_BUCKET_FILL - LEAKY_BUCKET_LEAK) + 0.5f);
-// Pour archivage : remettre LEAKY_BUCKET_MAX=30.0 et POMPE_PAUSE_MIN=10
+// Pour archivage : remettre LEAKY_BUCKET_MAX=30.0, POMPE_PAUSE_MIN=10, LEAKY_BUCKET_INTERVAL_MS=60000UL
 
 // Délais (en ms) pour la gestion d'anomalie d'air
 const unsigned long DELAI_AIR_OUI = 15000;      // 15s (au lieu de 30s)
@@ -455,7 +456,7 @@ void handleAffichage(unsigned long now) {
     // --- Leaky bucket : protection thermique ---
     // Chaque minute : +FILL si pompe ON, -LEAK toujours. Bucket vide = reset cycles consécutifs.
     static unsigned long lastBucketUpdate = 0;
-    if (now - lastBucketUpdate >= 60000UL) {
+    if (now - lastBucketUpdate >= LEAKY_BUCKET_INTERVAL_MS) {
       lastBucketUpdate = now;
       if (pompeVraimentActive) leakyBucket += LEAKY_BUCKET_FILL;
       leakyBucket -= LEAKY_BUCKET_LEAK;
